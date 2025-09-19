@@ -1,0 +1,515 @@
+Projekat: Toll Calculator (MVP)
+
+
+
+Cilj: Web aplikacija koja izračunava cenu putarine za rutu (grad X → grad Y), uz podršku klasičnih rampi i vinjeta, za Srbiju i susedne zemlje (prelazak granica).
+
+
+
+Stack:
+
+
+
+Backend: Symfony 7 (PHP 8.2+), Doctrine ORM, MySQL 8.x
+
+
+
+Frontend: Twig + HTML/CSS/JS, Leaflet + OpenStreetMap
+
+
+
+Ruting: OSRM (self-hosted) planirano; za MVP može stub ili kasnije integracija
+
+
+
+Geokodiranje: Nominatim (autocomplete gradova) + lokalni cache
+
+
+
+i18n: srpski i engleski
+
+
+
+Valute: RSD i EUR uz konverziju po NBS kursu (keš u bazi)
+
+
+
+
+
+Ograničenja:
+
+
+
+Bez React-a
+
+
+
+Bez Dockera (lokalni razvoj)
+
+
+
+Minimalni log/monitoring u MVP-u (dodaće se posle)
+
+
+
+
+
+Obuhvat zemalja i modeli naplate
+
+
+
+Prioritet: Srbija (PDF s cenama postoji).
+
+
+
+Prelazak granica: MK, BG, HR, HU, GR, ME.
+
+
+
+Modeli naplate:
+
+
+
+Ramps: klasične naplatne rampe sa segmentnim cenama
+
+
+
+Vignette: vinjete po zemlji i trajanju
+
+
+
+Neke zemlje su mešovite; sistem mora podržati oba.
+
+
+
+
+
+Trenutno stanje
+
+
+
+Symfony projekat kreiran (symfony new --webapp 7.1), app radi lokalno.
+
+
+
+MySQL radi (rešen root/password), doctrine:database:create uspešan, baza postoji.
+
+
+
+.env.local podešen (TCP 127.0.0.1:3306 ili unix socket).
+
+
+
+Entiteti i migracije još nisu napravljeni.
+
+
+
+Nema admin panela, nema ruting integracije, nema API endpointa za kalkulaciju.
+
+
+
+Postoji PDF cene za Srbiju (lokalna putanja korisnika); treba ga dodati u repo (data/source) ili izvući CSV (data/import).
+
+
+
+Git workflow
+
+
+
+master: stabilno, release-ready.
+
+
+
+develop: glavna razvojna grana.
+
+
+
+feature/*: svaka funkcionalnost ide na sopstvenu granu od develop.
+
+
+
+Merge: feature → develop nakon testiranja; develop → master kada je stabilno; opciono tag release.
+
+
+
+Radno pravilo: svaka veća izmena i dokumentacija idu kroz PR, mali, fokusirani koraci.
+
+
+
+Okruženje
+
+
+
+macOS, zsh; Homebrew PHP/Composer/MySQL.
+
+
+
+MySQL port 3306 podrazumevano; preko localhost često ide unix socket (Apple Silicon: /opt/homebrew/var/mysql/mysql.sock).
+
+
+
+.env.local ne komitovati.
+
+
+
+Primer .env.local (TCP):
+
+
+
+DATABASE_URL="mysql://root:LOZINKA@127.0.0.1:3306/toll_calculator?serverVersion=8.0&charset=utf8mb4"
+
+
+
+Domen model (plan entiteta)
+
+
+
+Enum:
+
+
+
+App\Enum\TollModel: RAMPS | VIGNETTE | MIXED
+
+
+
+App\Enum\VignetteDuration: DAY | WEEK | TEN_DAYS | MONTH | YEAR
+
+
+
+
+
+Entiteti:
+
+
+
+Country(code: string(2) unique, name, tollModel: enum)
+
+
+
+VehicleClass(code, name, type: car|motorcycle)
+
+
+
+TollStation(country, name, latitude, longitude, externalId?)
+
+
+
+TollSegment(country, fromStation, toStation, distanceKm?)
+
+
+
+TollPrice(segment, vehicleClass, amountEur DECIMAL(10,2), amountRsd DECIMAL(12,2), validFrom, validTo?)
+
+
+
+Vignette(country, vehicleClass, duration enum, durationDays, priceEur, priceRsd, validFrom, validTo?)
+
+
+
+ExchangeRate(base 3, quote 3, rate DECIMAL(18,8), fetchedAt, source default 'NBS')
+
+
+
+RouteCache(origin, destination, vehicleClass, countries JSON, routeGeojson JSON, breakdown JSON, totalEur, totalRsd, cachedAt)
+
+
+
+
+
+Napomene:
+
+
+
+Preferirati DECIMAL nad float za novac.
+
+
+
+Backed enums u PHP 8.1+ mogu da se mapiraju kolonom sa enumType.
+
+
+
+
+
+API (MVP interfejs – predlog)
+
+
+
+POST /api/toll/calculate
+
+
+
+Input JSON: { origin: "Novi Sad", destination: "Niš", vehicleClass: "CAR", countries: ["RS","HU"]? }
+
+
+
+Output JSON: { total: { eur: number, rsd: number }, breakdown: [ { type: "segment"|"vignette", country: "RS", label: "...", eur: number, rsd: number } ], route: GeoJSON|null }
+
+
+
+
+
+Validator: origin i destination obavezni; vehicleClass obavezno; countries opciono.
+
+
+
+Import podataka (Srbija)
+
+
+
+Fajlovi:
+
+
+
+data/source/toll_price_srb.pdf (original)
+
+
+
+data/import/rs_toll_prices.csv (normalizovan CSV)
+
+
+
+
+
+CSV format (header):
+
+
+
+country_code,station_from_name,station_to_name,vehicle_class_code,price_rsd,price_eur,valid_from,valid_to
+
+
+
+
+
+Import komanda (plan):
+
+
+
+app:import-rs-toll-prices data/import/rs_toll_prices.csv
+
+
+
+Kreira/azurira TollStation, TollSegment, TollPrice; popunjava EUR iz RSD po NBS ako potrebno.
+
+
+
+
+
+i18n i valute
+
+
+
+i18n: uključiti Symfony Translation; poruke i UI na sr i en (Twig trans).
+
+
+
+Valute: servis ExchangeRateService koji periodično (ručno u MVP) zove NBS i kešira u exchange_rate; računanje iznosa u obe valute.
+
+
+
+Mapa/ruting/geokod
+
+
+
+Mapa: Leaflet + OSM tiles (poštovati usage policy).
+
+
+
+Geokodiranje: Nominatim API za gradove (rate-limit i cache tabela ili file cache).
+
+
+
+Ruting: OSRM self-host (bez Dockera) planirano; MVP može bez rute/GeoJSON ili sa stubom, kasnije integracija
+
+
+
+Definition of Done (MVP)
+
+
+
+DB model definisan i migracije primenjene.
+
+
+
+Seed dummy podataka za Srbiju (min 2 stanice, 1 segment, cene za CAR i MOTORCYCLE).
+
+
+
+Importer za RS iz CSV-a radi (E2E: CSV → DB).
+
+
+
+API /api/toll/calculate vraća total i breakdown koristeći seed/CSV podatke (bez OSRM-a u prvom koraku).
+
+
+
+Frontend forma (Twig): unos gradova + izbor klase vozila; prikaz rezultata; (ruta na mapi opcionalno u prvom talasu).
+
+
+
+i18n: osnovne poruke sr/en; preklop jezika.
+
+
+
+Konverzija valuta iz ExchangeRate (ručno učitan kurs).
+
+
+
+Sledeći koraci (prioritetna lista)
+
+
+
+DB model i migracije
+
+
+
+
+
+Branch: feature/db-model (od develop)
+
+
+
+Napraviti enum-e i entitete po specifikaciji
+
+
+
+make:migration i doctrine:migrations:migrate
+
+
+
+Acceptance: tabele postoje, integritet FK ispravan
+
+
+
+
+
+Seed dummy podataka (Srbija)
+
+
+
+
+
+Branch: feature/seed-rs
+
+
+
+doctrine-fixtures-bundle dev-dependency
+
+
+
+AppFixtures: Country RS, VehicleClass CAR/MOTORCYCLE, par stanica (Beograd, Niš), segment i cene
+
+
+
+Acceptance: doctrine:fixtures:load uspešan, SELECT vraća očekivano
+
+
+
+
+
+Importer komanda za RS CSV
+
+
+
+
+
+Branch: feature/importer-rs
+
+
+
+make:command app:import-rs-toll-prices
+
+
+
+Parsira CSV, normalizuje imena, upisuje u DB, opcija --dry-run
+
+
+
+Acceptance: test CSV importuje bez grešaka; ponovni import ažurira (idempotentnost)
+
+
+
+
+
+API za kalkulaciju
+
+
+
+
+
+Branch: feature/api-calc
+
+
+
+Servis TollCalculator (strategije: RampTollCalculator, VignetteCalculator); kontroler POST /api/toll/calculate; validacije; jednostavan breakdown
+
+
+
+Acceptance: 200 OK sa očekivanim JSON; pokriven barem 1 unit i 1 integration test
+
+
+
+
+
+Frontend forma (Twig) + i18n
+
+
+
+
+
+Branch: feature/ui-form
+
+
+
+Forma (origin, destination, vehicleClass), poziva API (fetch), prikazuje total i breakdown; poruke sr/en
+
+
+
+Acceptance: ručni smoke test radi; promena jezika menja poruke
+
+
+
+
+
+Exchange rate servis (NBS)
+
+
+
+
+
+Branch: feature/exchange-rate
+
+
+
+Minimalni klijent (fetch dnevnog kursa), upis u ExchangeRate, korišćenje u kalkulatoru
+
+
+
+Acceptance: kurs snimljen, preračunavanje konzistentno
+
+
+
+Konvencije i smernice
+
+
+
+Novac: DECIMAL, bez float; preračunaj rano, formatiraj kasno.
+
+
+
+Enumi: PHP 8.1+ backed enums; Doctrine enumType kolone.
+
+
+
+Validacije: Symfony Validator za request DTO.
+
+
+
+README: ažuriraj nakon svake veće faze; dodaj korake “How to run”, “DB setup”, “Import data”, “Troubleshooting”.
+
+
+
+Ne komituj .env.local, var/, vendor/.
+
+
+
+Ne uvoditi Docker/React u MVP-u.
